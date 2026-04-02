@@ -1,6 +1,7 @@
 mod ollama;
 mod agent;
 mod tools;
+mod skills;
 
 use clap::Parser;
 use anyhow::Result;
@@ -9,6 +10,7 @@ use agent::Agent;
 use tools::Toolbox;
 use tools::fs::{ReadFileTool, WriteFileTool, ListDirTool};
 use tools::shell::ShellTool;
+use skills::load_skills_from_dir;
 
 #[derive(Parser)]
 #[command(name = "ollag")]
@@ -30,11 +32,18 @@ async fn main() -> Result<()> {
     let client = OllamaClient::new(cli.model);
     let mut toolbox = Toolbox::new();
 
-    // Register tools
+    // Register built-in tools
     toolbox.register(Box::new(ReadFileTool));
     toolbox.register(Box::new(WriteFileTool));
     toolbox.register(Box::new(ListDirTool));
     toolbox.register(Box::new(ShellTool));
+
+    // Load dynamic skills
+    let dynamic_skills = load_skills_from_dir("skills")?;
+    for skill in dynamic_skills {
+        println!("  - Skill loaded: {}", skill.name());
+        toolbox.register(skill);
+    }
 
     let agent = Agent::new(client, toolbox);
 

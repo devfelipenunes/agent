@@ -1,0 +1,5 @@
+{
+    "name": "get_weather",
+    "description": "Get current weather for a city using wttr.in. Args: { \"city\": string }",
+    "command": "curl -s wttr.in/{{city}}?format=3"
+}
