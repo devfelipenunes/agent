@@ -1,0 +1,1 @@
+/l/disk0/fnunes/ollag/target/debug/ollag: /l/disk0/fnunes/ollag/src/agent.rs /l/disk0/fnunes/ollag/src/main.rs /l/disk0/fnunes/ollag/src/ollama.rs /l/disk0/fnunes/ollag/src/tools/fs.rs /l/disk0/fnunes/ollag/src/tools/mod.rs /l/disk0/fnunes/ollag/src/tools/shell.rs
