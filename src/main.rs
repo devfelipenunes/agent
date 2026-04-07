@@ -1,90 +1,57 @@
+mod ui;
+mod bridge;
 mod ollama;
 mod agent;
 mod tools;
 mod skills;
 mod memory;
-mod ui;
-mod bridge;
 
-use clap::Parser;
+use ui::AppUi;
+use bridge::PythonBridge;
+use tokio::sync::mpsc;
 use anyhow::Result;
-use ollama::OllamaClient;
-use agent::Agent;
-use tools::Toolbox;
-use tools::fs::{ReadFileTool, WriteFileTool, ListDirTool};
-use tools::shell::ShellTool;
-use tools::obsidian::KnowledgeSearchTool;
-use skills::load_skills_from_dir;
-use memory::KnowledgeBase;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
-#[derive(Parser)]
-#[command(name = "ollag")]
-#[command(about = "Ollama Agent in Rust", long_about = None)]
-struct Cli {
-    #[arg(short, long, default_value = "qwen2.5-coder:7b")]
-    model: String,
-
-    #[arg(short, long)]
-    index: bool,
-
-    #[arg(help = "The task for the agent to perform")]
-    task: Option<String>,
-}
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let client = OllamaClient::new(cli.model.clone());
-    let kb_path = "knowledge_base.bin";
+    let (tx, mut rx) = mpsc::channel(100);
+    let mut bridge = PythonBridge::start(tx).await?;
+    
+    let mut app_ui = AppUi::new()?;
+    let mut chat_history = String::from("AetherMind V3/V8 Squad Initialized.\nType your research query:\n> ");
+    let mut sidebar_content = String::from("Status: Idle\n\nFindings:\n");
 
-    if cli.index {
-        let mut kb = KnowledgeBase::new();
-        kb.index_directory("/l/disk0/fnunes/obsidian/", &client).await?;
-        kb.save(kb_path)?;
-        println!("🚀 Knowledge base indexed and saved to {}", kb_path);
-        return Ok(());
+    // Simulate an initial query for testing the loop without input handling
+    bridge.send_query("Interoperability in Blockchain").await?;
+
+    loop {
+        // Poll events
+        if let Ok(event) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+            if let Some(ev) = event {
+                match ev.r#type.as_str() {
+                    "message" => chat_history.push_str(&format!("\n[{}] {}\n", ev.agent, ev.message)),
+                    "status" => sidebar_content = format!("Status: {} is {}\n\n{}", ev.agent, ev.message, sidebar_content),
+                    "finding" => sidebar_content.push_str(&format!("- {}\n", ev.message)),
+                    "artifact_update" => sidebar_content.push_str(&format!("\n[Artifact] {}\n", ev.message)),
+                    "system" => if ev.message == "Workflow completed" { break; },
+                    _ => {}
+                }
+            }
+        }
+        
+        app_ui.draw(&chat_history, &sidebar_content)?;
+        
+        // Simple exit condition for the test
+        if crossterm::event::poll(Duration::from_millis(50))? {
+            if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
+                if key.code == crossterm::event::KeyCode::Char('q') {
+                    break;
+                }
+            }
+        }
     }
 
-    let task = cli.task.ok_or_else(|| anyhow::anyhow!("Please provide a task or use --index"))?;
-
-    println!("🚀 Ollag starting with model: {}", cli.model);
-
-    // Load Knowledge Base
-    let kb = if std::path::Path::new(kb_path).exists() {
-        println!("  - Loading knowledge base...");
-        KnowledgeBase::load(kb_path)?
-    } else {
-        println!("  - No knowledge base found. Use --index to create one.");
-        KnowledgeBase::new()
-    };
-    let kb = Arc::new(Mutex::new(kb));
-
-    let mut toolbox = Toolbox::new();
-
-    // Register built-in tools
-    toolbox.register(Box::new(ReadFileTool));
-    toolbox.register(Box::new(WriteFileTool));
-    toolbox.register(Box::new(ListDirTool));
-    toolbox.register(Box::new(ShellTool));
-    toolbox.register(Box::new(KnowledgeSearchTool {
-        kb: kb.clone(),
-        client: client.clone(),
-    }));
-
-    // Load dynamic skills
-    let dynamic_skills = load_skills_from_dir("skills")?;
-    for skill in dynamic_skills {
-        println!("  - Skill loaded: {}", skill.name());
-        toolbox.register(skill);
-    }
-
-    let agent = Agent::new(client, toolbox);
-
-    if let Err(e) = agent.run(&task).await {
-        eprintln!("❌ Error: {}", e);
-    }
-
+    app_ui.destroy()?;
+    println!("AetherMind session ended.");
     Ok(())
 }
