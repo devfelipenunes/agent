@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use anyhow::Result;
 use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode};
+use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,83 +20,105 @@ async fn main() -> Result<()> {
     let mut bridge = PythonBridge::start(tx).await?;
     
     let mut app_ui = AppUi::new()?;
-    let mut chat_history = String::from("--- AetherMind Protocol V3/V8 ---\n");
-    let mut radio_log = String::from("--- Squad Radio Frequency ---\n");
-    let mut discovery_board = String::from("--- Discovery & Artifacts ---\n");
-    let mut input_buffer = String::new();
     
-    let mut focus: usize = 0; // 0: Chat, 1: Radio, 2: Discovery
-    let mut scrolls: [u16; 3] = [0, 0, 0];
+    let mut chat_buffer = String::from("AetherMind v4 Autonomous System Online.\nType a message to begin.\n");
+    let mut reader_buffer = String::from("# Waiting for artifacts...\nAsk me to write an article or report to view the result here.");
+    let mut radio_buffer = String::from("--- Internal Squad Frequencies ---\n");
+    
+    // Squad State Tracking
+    let mut agents_status: HashMap<String, String> = HashMap::new();
+    let default_agents = vec!["Aether-PM", "V3-Librarian", "V3-Scout", "V3-Analyst", "V8-Writer", "V8-Critic"];
+    for agent in &default_agents {
+        agents_status.insert(agent.to_string(), "Idle".to_string());
+    }
+    
+    let mut latest_background_status = String::from("System: Ready");
+    
+    let mut input_buffer = String::new();
+    let mut active_tab: usize = 0;
+    let mut scrolls: [u16; 4] = [0, 0, 0, 0];
 
     loop {
-        // 1. Process Eventos do Python
+        let mut ui_needs_update = false;
+
         while let Ok(event) = rx.try_recv() {
+            ui_needs_update = true;
             match event.r#type.as_str() {
-                "message" => {
-                    chat_history.push_str(&format!("\n[{}] {}\n", event.agent, event.message));
-                    scrolls[0] = chat_history.lines().count() as u16; // Auto-scroll
+                "message_start" => {
+                    chat_buffer.push_str(&format!("\n\n[🤖 {}]: ", event.agent));
+                    scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
                 }
-                "radio" => {
-                    radio_log.push_str(&format!("[{}] {}\n", event.agent, event.message));
-                    scrolls[1] = radio_log.lines().count() as u16;
+                "token" => {
+                    chat_buffer.push_str(&event.message);
+                    scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
                 }
-                "thought" => {
-                    radio_log.push_str(&format!("* {} thinks: {}\n", event.agent, event.message));
-                    scrolls[1] = radio_log.lines().count() as u16;
+                "artifact_start" => {
+                    reader_buffer.clear();
                 }
-                "finding" => {
-                    discovery_board.push_str(&format!("• {}\n", event.message));
-                    scrolls[2] = discovery_board.lines().count() as u16;
+                "artifact_chunk" => {
+                    reader_buffer.push_str(&event.message);
+                    scrolls[1] = reader_buffer.lines().count().saturating_sub(1) as u16;
                 }
-                "artifact_update" => {
-                    discovery_board.push_str(&format!("\n[ARTIFACT] {}\n", event.message));
-                    scrolls[2] = discovery_board.lines().count() as u16;
+                "artifact_full" => {
+                    chat_buffer.push_str("\n\n✅ [SISTEMA] Novo artefato gerado com sucesso! Mude para a aba READER (F2) para visualizar o documento completo.");
+                    scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
+                }
+                "radio" | "thought" => {
+                    let prefix = if event.r#type == "thought" { "💡" } else { "📡" };
+                    radio_buffer.push_str(&format!("{} [{}] {}\n", prefix, event.agent, event.message));
+                    scrolls[2] = radio_buffer.lines().count().saturating_sub(1) as u16;
                 }
                 "status" => {
-                    discovery_board = format!("Active Task: {} -> {}\n{}", event.agent, event.message, discovery_board);
+                    agents_status.insert(event.agent.clone(), event.message.clone());
+                    latest_background_status = format!("{} -> {}", event.agent, event.message);
+                }
+                "system" => {
+                    latest_background_status = format!("System: {}", event.message);
+                    radio_buffer.push_str(&format!("⚙️ SYSTEM: {}\n", event.message));
+                    scrolls[2] = radio_buffer.lines().count().saturating_sub(1) as u16;
                 }
                 "error" => {
-                    chat_history.push_str(&format!("\n❌ SYSTEM ERROR: {}\n", event.message));
+                    latest_background_status = format!("ERROR: {}", event.message);
+                    chat_buffer.push_str(&format!("\n\n❌ ERRO FATAL [{}]: {}\n", event.agent, event.message));
+                    scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
                 }
                 _ => {}
             }
         }
         
-        // 2. Desenhar UI com suporte a 3 colunas e scroll
-        app_ui.draw(&chat_history, &radio_log, &discovery_board, &input_buffer, focus, &scrolls)?;
+        // Build the squad status text
+        let mut squad_display = String::from("🛡️ AETHERMIND SQUAD STATUS 🛡️\n=================================\n\n");
+        for agent in &default_agents {
+            let status = agents_status.get(*agent).unwrap_or(&"Idle".to_string()).clone();
+            let icon = if status == "Idle" { "💤" } else { "🔄" };
+            squad_display.push_str(&format!("{} {:<15} | {}\n\n", icon, agent, status));
+        }
+
+        // Draw TUI
+        app_ui.draw(&chat_buffer, &reader_buffer, &radio_buffer, &squad_display, &input_buffer, active_tab, &scrolls, &latest_background_status)?;
         
-        // 3. Processar Input e Navegação
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(Duration::from_millis(20))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Tab => {
-                        focus = (focus + 1) % 3;
-                    }
-                    KeyCode::Up => {
-                        if scrolls[focus] > 0 {
-                            scrolls[focus] -= 1;
-                        }
-                    }
-                    KeyCode::Down => {
-                        scrolls[focus] += 1;
-                    }
-                    KeyCode::Char(c) => {
-                        input_buffer.push(c);
-                    }
-                    KeyCode::Backspace => {
-                        input_buffer.pop();
-                    }
+                    KeyCode::F(1) => active_tab = 0,
+                    KeyCode::F(2) => active_tab = 1,
+                    KeyCode::F(3) => active_tab = 2,
+                    KeyCode::F(4) => active_tab = 3,
+                    KeyCode::Up => scrolls[active_tab] = scrolls[active_tab].saturating_sub(1),
+                    KeyCode::Down => scrolls[active_tab] = scrolls[active_tab].saturating_add(1),
+                    KeyCode::Char(c) => input_buffer.push(c),
+                    KeyCode::Backspace => { input_buffer.pop(); }
                     KeyCode::Enter => {
                         if !input_buffer.is_empty() {
-                            chat_history.push_str(&format!("\nVocê: {}\n", input_buffer));
+                            chat_buffer.push_str(&format!("\n\n[👤 Você]: {}\n", input_buffer));
+                            latest_background_status = String::from("Aether-PM -> Processando query...");
                             bridge.send_query(&input_buffer).await?;
                             input_buffer.clear();
-                            scrolls[0] = chat_history.lines().count() as u16;
+                            active_tab = 0;
+                            scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
                         }
                     }
-                    KeyCode::Esc => {
-                        break;
-                    }
+                    KeyCode::Esc => break,
                     _ => {}
                 }
             }
@@ -103,6 +126,5 @@ async fn main() -> Result<()> {
     }
 
     app_ui.destroy()?;
-    println!("AetherMind Protocol Terminated.");
     Ok(())
 }

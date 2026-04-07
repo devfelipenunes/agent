@@ -30,6 +30,26 @@ class ObsidianTool:
         
         return "\n---\n".join(results[:5]) # Limita a 5 resultados para o contexto
 
+    def write_note(self, title: str, content: str) -> str:
+        """Cria ou atualiza uma nota no vault do Obsidian (subdiretório AetherMind/Findings)."""
+        import re
+        # Garante que o nome do arquivo é válido
+        safe_title = re.sub(r'[\\/*?:"<>|]', "", title).strip()
+        if not safe_title:
+            safe_title = "Untitled_Finding"
+            
+        target_dir = os.path.join(self.vault_path, "AetherMind", "Findings")
+        os.makedirs(target_dir, exist_ok=True)
+        
+        file_path = os.path.join(target_dir, f"{safe_title}.md")
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return f"Nota salva com sucesso em {file_path}"
+        except Exception as e:
+            return f"Erro ao salvar nota: {e}"
+
 if __name__ == "__main__":
     # Teste rápido
     vault = "/l/disk0/fnunes/obsidian/"
