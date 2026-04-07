@@ -1,17 +1,29 @@
-import os
-from typing import TypedDict, List
+from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_ollama import ChatOllama
 from dotenv import load_dotenv
+import json
+import sys
+import os
 
 # Carrega variáveis de ambiente
 load_dotenv(".env.elite")
 
 class AgentState(TypedDict):
     query: str
-    context: List[str]
-    report: str
-    thought: str
+    chat_history: List[Dict[str, str]]
+    findings: List[str]
+    artifact: str
+    current_status: str
+
+def emit_event(event_type: str, agent: str, message: str):
+    """Emits JSON-RPC style events to stdout for Rust to consume."""
+    event = {
+        "type": event_type,
+        "agent": agent,
+        "message": message
+    }
+    print(json.dumps(event), flush=True)
 
 # Configura o LLM Gemma 4
 # Gemma 4 via Ollama v0.20.2
@@ -21,71 +33,68 @@ llm = ChatOllama(
     temperature=0.1
 )
 
-def research_node(state: AgentState):
-    """Nodo de Pesquisa: Decide o que pesquisar."""
+def librarian_node(state: AgentState):
     query = state["query"]
-    print(f"[*] Node (Research): Researching query: {query}")
+    emit_event("status", "V3-Librarian", "Buscando contexto local (Obsidian)...")
     
-    # Simulação de pensamento/decisão do LLM
-    prompt = f"O usuário quer pesquisar sobre: {query}. O que você deve procurar primeiro? Responda de forma curta."
-    try:
-        response = llm.invoke(prompt)
-        thought = response.content
-    except Exception as e:
-        thought = f"Erro ao acessar LLM: {e}"
-        
-    return {
-        "thought": thought,
-        "context": [f"Pesquisa inicial iniciada para: {query}"]
-    }
+    # Simulação de busca no Cognee/Obsidian
+    local_context = f"Contexto local para: {query}"
+    
+    emit_event("message", "V3-Librarian", f"Baseado nas suas notas, {query} é um tópico interessante. Iniciando pesquisa profunda...")
+    
+    return {"current_status": "librarian_done"}
 
-def synthesize_node(state: AgentState):
-    """Nodo de Síntese: Gera o relatório final."""
+def scout_node(state: AgentState):
     query = state["query"]
-    context = "\n".join(state["context"] if state.get("context") else [])
-    thought = state.get("thought", "")
+    emit_event("status", "V3-Scout", "Minerando a Web e GitHub...")
     
-    print(f"[*] Node (Synthesize): Generating report for: {query}")
+    # Simulação de busca
+    finding = f"Artigo recente sobre {query} encontrado."
+    emit_event("finding", "V3-Scout", finding)
     
-    prompt = f"""
-    Objetivo: {query}
-    Reflexão Anterior: {thought}
-    Contexto: {context}
+    return {"findings": [finding], "current_status": "scout_done"}
+
+def architect_node(state: AgentState):
+    emit_event("status", "V8-Architect", "Estruturando o artefato final...")
+    findings = "\n".join(state.get("findings", []))
     
-    Com base nas informações acima, gere um relatório técnico curto e estruturado em Português sobre este tópico.
-    Foque nos pontos principais e próximos passos.
-    """
-    try:
-        response = llm.invoke(prompt)
-        report = response.content
-    except Exception as e:
-        report = f"Erro ao gerar relatório: {e}"
+    artifact = f"# Draft: {state['query']}\n\nBaseado nas pesquisas:\n{findings}"
+    emit_event("artifact_update", "V8-Architect", "Rascunho gerado.")
     
-    return {"report": report}
+    return {"artifact": artifact, "current_status": "architect_done"}
 
 # Constrói o Grafo de Estados
 workflow = StateGraph(AgentState)
-workflow.add_node("research", research_node)
-workflow.add_node("synthesize", synthesize_node)
+workflow.add_node("librarian", librarian_node)
+workflow.add_node("scout", scout_node)
+workflow.add_node("architect", architect_node)
 
-# Define as transições
-workflow.set_entry_point("research")
-workflow.add_edge("research", "synthesize")
-workflow.add_edge("synthesize", END)
+workflow.set_entry_point("librarian")
+workflow.add_edge("librarian", "scout")
+workflow.add_edge("scout", "architect")
+workflow.add_edge("architect", END)
 
-# Compila o grafo
 app = workflow.compile()
 
+def main_loop():
+    emit_event("system", "System", "AetherMind Python Backend Started")
+    for line in sys.stdin:
+        try:
+            req = json.loads(line)
+            query = req.get("query", "")
+            if query:
+                inputs = {
+                    "query": query,
+                    "chat_history": [],
+                    "findings": [],
+                    "artifact": "",
+                    "current_status": ""
+                }
+                # Executa o grafo síncrono para o exemplo, idealmente async
+                app.invoke(inputs)
+                emit_event("system", "System", "Workflow completed")
+        except Exception as e:
+            emit_event("error", "System", str(e))
+
 if __name__ == "__main__":
-    # Teste rápido se rodar o script diretamente
-    test_query = "Impacto do Gemma 4 na produtividade de desenvolvedores"
-    inputs = {"query": test_query, "context": [], "report": "", "thought": ""}
-    
-    print(f"--- Iniciando Workflow para: {test_query} ---")
-    result = app.invoke(inputs)
-    
-    print("\n" + "="*50)
-    print("FINAL REPORT")
-    print("="*50)
-    print(result["report"])
-    print("="*50)
+    main_loop()
