@@ -4,6 +4,7 @@ mod tools;
 mod skills;
 mod memory;
 mod ui;
+mod bridge;
 
 use clap::Parser;
 use anyhow::Result;
