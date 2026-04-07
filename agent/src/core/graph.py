@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import signal
+import asyncio
 
 # Suprime BrokenPipeError no Linux/macOS
 try:
@@ -17,6 +18,7 @@ sys.path.append(agent_dir)
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 
 # Carrega variáveis de ambiente
@@ -53,14 +55,32 @@ def emit_thought(agent: str, message: str):
 def emit_token(agent: str, token: str):
     emit_event("token", agent, token)
 
-# Configura o LLM Gemma 4
-llm = ChatOllama(
-    model="gemma4:26b",
-    base_url="http://localhost:11434",
-    temperature=0.1
-)
+# Global LLM placeholders
+llm_heavy = None
+llm_chat = None
+
+def init_models(mode: str):
+    global llm_heavy, llm_chat
+    
+    # Heavy model is always Ollama for now (Gemma 26b)
+    llm_heavy = ChatOllama(
+        model="gemma4:26b",
+        base_url="http://localhost:11434",
+        temperature=0.1
+    )
+    
+    if mode == "token":
+        llm_chat = ChatOpenAI(
+            model="gpt-4o",
+            temperature=0.7
+        )
+        emit_event("system", "System", "Backend initialized in TOKEN mode (OpenAI)")
+    else:
+        llm_chat = llm_heavy
+        emit_event("system", "System", "Backend initialized in LOCAL mode (Ollama)")
 
 from src.tools.mcp_obsidian import ObsidianTool
+from src.tools.arxiv import search_arxiv
 from tavily import TavilyClient
 
 # Inicializa ferramentas
@@ -70,7 +90,7 @@ obsidian = ObsidianTool(vault_path)
 tavily_key = os.getenv("TAVILY_API_KEY", "")
 tavily = TavilyClient(api_key=tavily_key) if tavily_key else None
 
-def orchestrator_node(state: AgentState):
+async def orchestrator_node(state: AgentState):
     query = state["query"]
     emit_event("status", "Aether-PM", "Analisando intenção...")
     emit_thought("Aether-PM", f"Processando entrada: '{query}'")
@@ -85,12 +105,13 @@ Regras:
     full_response = ""
     emit_event("message_start", "Aether-PM", "")
     try:
-        for chunk in llm.stream(prompt):
+        # Usando llm_chat (pode ser OpenAI ou Ollama dependendo do modo)
+        for chunk in llm_chat.stream(prompt):
             content = chunk.content
             full_response += content
             emit_token("Aether-PM", content)
     except Exception as e:
-        emit_event("error", "Ollama", str(e))
+        emit_event("error", "AI-Engine", str(e))
         return {"current_status": "error", "user_intent": "CHAT"}
     
     if "SQUAD_REQUIRED" in full_response:
@@ -98,52 +119,41 @@ Regras:
     else:
         return {"current_status": "chat_only", "user_intent": "CHAT"}
 
-def librarian_node(state: AgentState):
+async def librarian_node(state: AgentState):
     query = state["query"]
     emit_event("status", "V3-Librarian", "Consultando Obsidian...")
     local_context = obsidian.search_notes(query)
-    msg = "Notas encontradas." if "Nenhuma nota" not in local_context else "Sem notas locais."
+    msg = "Notas locais encontradas." if "Nenhuma nota" not in local_context else "Sem notas locais."
     emit_event("message_start", "V3-Librarian", "")
     emit_event("token", "V3-Librarian", msg)
     return {"findings": [f"Obsidian: {local_context}"], "current_status": "librarian_done"}
 
-from src.tools.arxiv import search_arxiv
-
-def scout_node(state: AgentState):
+async def scout_node(state: AgentState):
     query = state["query"]
     emit_event("status", "V3-Scout", "Minerando Web & ArXiv...")
-
     findings = []
-
-    # ArXiv Search
-    emit_radio("V3-Scout", "System", "Iniciando busca no ArXiv...")
+    emit_radio("V3-Scout", "System", "Iniciando buscas externas...")
+    
     try:
         arxiv_results = search_arxiv(query, max_results=3)
         findings.extend(arxiv_results)
-        emit_radio("V3-Scout", "Analyst", f"Coletados {len(arxiv_results)} papers do ArXiv.")
     except Exception as e:
         findings.append(f"Erro ArXiv: {e}")
 
-    # Web Search
     if tavily:
         try:
-            emit_radio("V3-Scout", "System", "Iniciando busca no Tavily...")
             search_result = tavily.search(query=query, search_depth="advanced")
             web_findings = [f"Web: {r['title']} - {f['content'][:300]}..." for r in [search_result] for f in r.get('results', [])]
             findings.extend(web_findings)
-            emit_radio("V3-Scout", "Analyst", f"Coletados {len(web_findings)} links da Web.")
         except Exception as e:
             findings.append(f"Erro Web: {e}")
-    else:
-        findings.append("Busca Web desabilitada")
-
+    
     return {"findings": findings, "current_status": "scout_done"}
 
-def analyst_node(state: AgentState):
+async def analyst_node(state: AgentState):
     emit_event("status", "V3-Analyst", "Sintetizando e salvando...")
     findings_text = "\n".join(state["findings"])
-
-    # Save finding to obsidian if there is useful external data
+    
     if state["findings"]:
         try:
             title = state["query"].replace(" ", "_")[:30]
@@ -152,19 +162,17 @@ def analyst_node(state: AgentState):
         except Exception as e:
             emit_radio("V3-Analyst", "Librarian", f"Falha ao salvar nota: {e}")
 
-    emit_radio("V3-Analyst", "Writer", "Gerando Briefing técnico.")
     prompt = f"Crie um Briefing para artigo sobre: {state['query']} baseado em:\n{findings_text}"
-    response = llm.invoke(prompt)
+    response = await llm_heavy.ainvoke(prompt)
     return {"brief": response.content, "current_status": "analyst_done"}
 
-
-def writer_node(state: AgentState):
+async def writer_node(state: AgentState):
     emit_event("status", "V8-Writer", "Escrevendo...")
     prompt = f"Escreva um artigo em Markdown para o briefing:\n{state['brief']}"
     
     full_art = ""
     emit_event("artifact_start", "V8-Writer", "")
-    for chunk in llm.stream(prompt):
+    for chunk in llm_heavy.stream(prompt):
         content = chunk.content
         full_art += content
         emit_event("artifact_chunk", "V8-Writer", content)
@@ -172,13 +180,14 @@ def writer_node(state: AgentState):
     emit_event("artifact_full", "V8-Writer", full_art)
     return {"artifact": full_art, "current_status": "writer_done"}
 
-def critic_node(state: AgentState):
+async def critic_node(state: AgentState):
     emit_event("status", "V8-Critic", "Revisando...")
     return {"current_status": "approved"}
 
 def route_intent(state: AgentState):
     return "research_path" if state.get("user_intent") == "RESEARCH" else "end"
 
+# Build Graph
 workflow = StateGraph(AgentState)
 workflow.add_node("orchestrator", orchestrator_node)
 workflow.add_node("librarian", librarian_node)
@@ -195,17 +204,26 @@ workflow.add_edge("writer", "critic")
 workflow.add_edge("critic", END)
 app = workflow.compile()
 
-def main_loop():
-    emit_event("system", "System", "AetherMind v3.2 Streaming Started")
+async def main_loop():
+    emit_event("system", "System", "AetherMind v4.2 Waiting for Config...")
+    initialized = False
+    
     while True:
         try:
-            line = sys.stdin.readline()
+            line = await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
             if not line: break
             
-            # Acknowledgment imediato
-            emit_event("system", "System", f"Recebido: {line[:30].strip()}...")
-            
             req = json.loads(line)
+            
+            if req.get("type") == "config":
+                init_models(req.get("mode", "local"))
+                initialized = True
+                continue
+            
+            if not initialized:
+                emit_event("error", "System", "Backend not initialized. Send config first.")
+                continue
+
             query = req.get("query", "")
             if query:
                 inputs = {
@@ -213,7 +231,7 @@ def main_loop():
                     "artifact": "", "brief": "", "review_feedback": "", 
                     "current_status": "", "user_intent": ""
                 }
-                app.invoke(inputs)
+                await app.ainvoke(inputs)
                 emit_event("system", "System", "Cycle complete")
         except (EOFError, KeyboardInterrupt):
             break
@@ -221,4 +239,4 @@ def main_loop():
             emit_event("error", "System", str(e))
 
 if __name__ == "__main__":
-    main_loop()
+    asyncio.run(main_loop())

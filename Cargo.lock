@@ -1372,6 +1372,7 @@ dependencies = [
  "dialoguer",
  "futures-util",
  "hnsw_rs",
+ "libc",
  "ollama-rs",
  "openssl",
  "ratatui",

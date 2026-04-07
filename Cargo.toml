@@ -20,3 +20,4 @@ walkdir = "2.3"
 ratatui = "0.30.0"
 crossterm = "0.29.0"
 tokio-util = { version = "0.7.18", features = ["codec"] }
+libc = "0.2.184"

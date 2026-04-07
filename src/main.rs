@@ -14,15 +14,24 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode};
 use std::collections::HashMap;
 
+enum AppState {
+    Startup,
+    Running,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let (tx, mut rx) = mpsc::channel(100);
     let mut bridge = PythonBridge::start(tx).await?;
     
     let mut app_ui = AppUi::new()?;
+    let mut app_state = AppState::Startup;
     
-    let mut chat_buffer = String::from("AetherMind v4 Autonomous System Online.\nType a message to begin.\n");
-    let mut reader_buffer = String::from("# Waiting for artifacts...\nAsk me to write an article or report to view the result here.");
+    // Structured Chat Log
+    let mut chat_log: Vec<(String, String)> = Vec::new();
+    chat_log.push(("System".to_string(), "AetherMind v4.2 Protocol Selection...".to_string()));
+    
+    let mut reader_buffer = String::from("# Waiting for artifacts...");
     let mut radio_buffer = String::from("--- Internal Squad Frequencies ---\n");
     
     // Squad State Tracking
@@ -33,24 +42,25 @@ async fn main() -> Result<()> {
     }
     
     let mut latest_background_status = String::from("System: Ready");
-    
     let mut input_buffer = String::new();
     let mut active_tab: usize = 0;
     let mut scrolls: [u16; 4] = [0, 0, 0, 0];
+    let spinner_frames = vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let mut spinner_index = 0;
 
     loop {
-        let mut ui_needs_update = false;
+        spinner_index = (spinner_index + 1) % spinner_frames.len();
 
+        // 1. Handle background events from Python
         while let Ok(event) = rx.try_recv() {
-            ui_needs_update = true;
             match event.r#type.as_str() {
                 "message_start" => {
-                    chat_buffer.push_str(&format!("\n\n[🤖 {}]: ", event.agent));
-                    scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
+                    chat_log.push((event.agent.clone(), String::new()));
                 }
                 "token" => {
-                    chat_buffer.push_str(&event.message);
-                    scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
+                    if let Some(last_msg) = chat_log.last_mut() {
+                        last_msg.1.push_str(&event.message);
+                    }
                 }
                 "artifact_start" => {
                     reader_buffer.clear();
@@ -60,8 +70,7 @@ async fn main() -> Result<()> {
                     scrolls[1] = reader_buffer.lines().count().saturating_sub(1) as u16;
                 }
                 "artifact_full" => {
-                    chat_buffer.push_str("\n\n✅ [SISTEMA] Novo artefato gerado com sucesso! Mude para a aba READER (F2) para visualizar o documento completo.");
-                    scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
+                    chat_log.push(("System".to_string(), "✅ Novo artefato gerado!".to_string()));
                 }
                 "radio" | "thought" => {
                     let prefix = if event.r#type == "thought" { "💡" } else { "📡" };
@@ -75,51 +84,89 @@ async fn main() -> Result<()> {
                 "system" => {
                     latest_background_status = format!("System: {}", event.message);
                     radio_buffer.push_str(&format!("⚙️ SYSTEM: {}\n", event.message));
-                    scrolls[2] = radio_buffer.lines().count().saturating_sub(1) as u16;
                 }
                 "error" => {
                     latest_background_status = format!("ERROR: {}", event.message);
-                    chat_buffer.push_str(&format!("\n\n❌ ERRO FATAL [{}]: {}\n", event.agent, event.message));
-                    scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
+                    chat_log.push(("Error".to_string(), format!("❌ ERRO: {}", event.message)));
                 }
                 _ => {}
             }
         }
         
-        // Build the squad status text
-        let mut squad_display = String::from("🛡️ AETHERMIND SQUAD STATUS 🛡️\n=================================\n\n");
-        for agent in &default_agents {
-            let status = agents_status.get(*agent).unwrap_or(&"Idle".to_string()).clone();
-            let icon = if status == "Idle" { "💤" } else { "🔄" };
-            squad_display.push_str(&format!("{} {:<15} | {}\n\n", icon, agent, status));
-        }
-
-        // Draw TUI
-        app_ui.draw(&chat_buffer, &reader_buffer, &radio_buffer, &squad_display, &input_buffer, active_tab, &scrolls, &latest_background_status)?;
-        
-        if event::poll(Duration::from_millis(20))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::F(1) => active_tab = 0,
-                    KeyCode::F(2) => active_tab = 1,
-                    KeyCode::F(3) => active_tab = 2,
-                    KeyCode::F(4) => active_tab = 3,
-                    KeyCode::Up => scrolls[active_tab] = scrolls[active_tab].saturating_sub(1),
-                    KeyCode::Down => scrolls[active_tab] = scrolls[active_tab].saturating_add(1),
-                    KeyCode::Char(c) => input_buffer.push(c),
-                    KeyCode::Backspace => { input_buffer.pop(); }
-                    KeyCode::Enter => {
-                        if !input_buffer.is_empty() {
-                            chat_buffer.push_str(&format!("\n\n[👤 Você]: {}\n", input_buffer));
-                            latest_background_status = String::from("Aether-PM -> Processando query...");
-                            bridge.send_query(&input_buffer).await?;
-                            input_buffer.clear();
-                            active_tab = 0;
-                            scrolls[0] = chat_buffer.lines().count().saturating_sub(1) as u16;
+        match app_state {
+            AppState::Startup => {
+                app_ui.draw_startup()?;
+                if event::poll(Duration::from_millis(50))? {
+                    if let Event::Key(key) = event::read()? {
+                        match key.code {
+                            KeyCode::Char('l') | KeyCode::Char('L') => {
+                                bridge.send_config("local").await?;
+                                app_state = AppState::Running;
+                                chat_log.push(("System".to_string(), "--- LOCAL MODE INITIALIZED ---".to_string()));
+                            }
+                            KeyCode::Char('t') | KeyCode::Char('T') => {
+                                bridge.send_config("token").await?;
+                                app_state = AppState::Running;
+                                chat_log.push(("System".to_string(), "--- TOKEN MODE INITIALIZED (OpenAI) ---".to_string()));
+                            }
+                            KeyCode::Esc => break,
+                            _ => {}
                         }
                     }
-                    KeyCode::Esc => break,
-                    _ => {}
+                }
+            }
+            AppState::Running => {
+                // Rebuild chat buffer
+                let mut chat_display = String::new();
+                for (agent, content) in &chat_log {
+                    if agent == "Você" {
+                        chat_display.push_str(&format!("\n[👤 Você]: {}\n", content));
+                    } else if agent == "System" || agent == "Error" {
+                        chat_display.push_str(&format!("\n{}\n", content));
+                    } else {
+                        chat_display.push_str(&format!("\n[🤖 {}]: {}", agent, content));
+                    }
+                }
+                scrolls[0] = chat_display.lines().count().saturating_sub(1) as u16;
+
+                let mut squad_display = String::from("🛡️ AETHERMIND SQUAD STATUS 🛡️\n=================================\n\n");
+                for agent in &default_agents {
+                    let status = agents_status.get(*agent).unwrap_or(&"Idle".to_string()).clone();
+                    let icon = if status == "Idle" { "💤" } else { "🔄" };
+                    squad_display.push_str(&format!("{} {:<15} | {}\n\n", icon, agent, status));
+                }
+
+                let status_with_spinner = if latest_background_status.contains("Idle") || latest_background_status.contains("Ready") {
+                    latest_background_status.clone()
+                } else {
+                    format!("{} {}", spinner_frames[spinner_index], latest_background_status)
+                };
+
+                app_ui.draw(&chat_display, &reader_buffer, &radio_buffer, &squad_display, &input_buffer, active_tab, &scrolls, &status_with_spinner)?;
+                
+                if event::poll(Duration::from_millis(50))? {
+                    if let Event::Key(key) = event::read()? {
+                        match key.code {
+                            KeyCode::F(1) => active_tab = 0,
+                            KeyCode::F(2) => active_tab = 1,
+                            KeyCode::F(3) => active_tab = 2,
+                            KeyCode::F(4) => active_tab = 3,
+                            KeyCode::Up => scrolls[active_tab] = scrolls[active_tab].saturating_sub(1),
+                            KeyCode::Down => scrolls[active_tab] = scrolls[active_tab].saturating_add(1),
+                            KeyCode::Char(c) => input_buffer.push(c),
+                            KeyCode::Backspace => { input_buffer.pop(); }
+                            KeyCode::Enter => {
+                                if !input_buffer.is_empty() {
+                                    chat_log.push(("Você".to_string(), input_buffer.clone()));
+                                    bridge.send_query(&input_buffer).await?;
+                                    input_buffer.clear();
+                                    active_tab = 0;
+                                }
+                            }
+                            KeyCode::Esc => break,
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
