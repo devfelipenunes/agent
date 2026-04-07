@@ -1,0 +1,6 @@
+langgraph
+langchain-ollama
+cognee
+mcp
+python-dotenv
+tavily-python
