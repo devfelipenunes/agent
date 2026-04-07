@@ -1,7 +1,6 @@
 use crate::ollama::OllamaClient;
 use crate::tools::Toolbox;
 use anyhow::Result;
-use serde_json::json;
 
 pub struct Agent {
     client: OllamaClient,

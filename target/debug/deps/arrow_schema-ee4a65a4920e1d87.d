@@ -1,0 +1,11 @@
+/l/disk0/fnunes/me/ollag/target/debug/deps/arrow_schema-ee4a65a4920e1d87.d: /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/lib.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/datatype.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/error.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/field.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/fields.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/schema.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/ffi.rs
+
+/l/disk0/fnunes/me/ollag/target/debug/deps/libarrow_schema-ee4a65a4920e1d87.rmeta: /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/lib.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/datatype.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/error.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/field.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/fields.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/schema.rs /l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/ffi.rs
+
+/l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/lib.rs:
+/l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/datatype.rs:
+/l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/error.rs:
+/l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/field.rs:
+/l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/fields.rs:
+/l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/schema.rs:
+/l/disk0/fnunes/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-51.0.0/src/ffi.rs:

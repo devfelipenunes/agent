@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 pub mod fs;
 pub mod shell;
+pub mod obsidian;
 
 #[async_trait]
 pub trait Tool: Send + Sync {
