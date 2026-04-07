@@ -1,10 +1,16 @@
+import sys
+import os
+import json
+
+# Adiciona o diretório 'agent' ao path para permitir imports de 'src'
+current_dir = os.path.dirname(os.path.abspath(__file__))
+agent_dir = os.path.dirname(os.path.dirname(current_dir))
+sys.path.append(agent_dir)
+
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_ollama import ChatOllama
 from dotenv import load_dotenv
-import json
-import sys
-import os
 
 # Carrega variáveis de ambiente
 load_dotenv(".env.elite")
@@ -23,7 +29,16 @@ def emit_event(event_type: str, agent: str, message: str):
         "agent": agent,
         "message": message
     }
-    print(json.dumps(event), flush=True)
+    try:
+        print(json.dumps(event), flush=True)
+    except BrokenPipeError:
+        sys.exit(0)
+
+def emit_radio(agent: str, target: str, message: str):
+    emit_event("radio", agent, f"-> {target}: {message}")
+
+def emit_thought(agent: str, message: str):
+    emit_event("thought", agent, message)
 
 # Configura o LLM Gemma 4
 # Gemma 4 via Ollama v0.20.2
@@ -33,31 +48,65 @@ llm = ChatOllama(
     temperature=0.1
 )
 
+from src.tools.mcp_obsidian import ObsidianTool
+from tavily import TavilyClient
+
+# Inicializa ferramentas
+vault_path = os.getenv("OBSIDIAN_VAULT_PATH", "/l/disk0/fnunes/obsidian/")
+obsidian = ObsidianTool(vault_path)
+
+tavily_key = os.getenv("TAVILY_API_KEY", "")
+tavily = TavilyClient(api_key=tavily_key) if tavily_key else None
+
 def librarian_node(state: AgentState):
     query = state["query"]
-    emit_event("status", "V3-Librarian", "Buscando contexto local (Obsidian)...")
+    emit_thought("V3-Librarian", f"Iniciando busca por '{query}' no Obsidian Vault.")
+    emit_radio("V3-Librarian", "Analyst", "Vou verificar se temos notas locais sobre isso.")
     
-    # Simulação de busca no Cognee/Obsidian
-    local_context = f"Contexto local para: {query}"
+    local_context = obsidian.search_notes(query)
     
-    emit_event("message", "V3-Librarian", f"Baseado nas suas notas, {query} é um tópico interessante. Iniciando pesquisa profunda...")
+    if "Nenhuma nota encontrada" in local_context:
+        emit_radio("V3-Librarian", "Scout", "Nada local. Sua vez de minerar a Web.")
+        msg = "Não encontrei notas relacionadas no seu Obsidian."
+    else:
+        emit_radio("V3-Librarian", "Analyst", "Encontrei referências. Enviando para análise.")
+        msg = "Encontrei referências locais interessantes."
     
-    return {"current_status": "librarian_done"}
+    emit_event("message", "V3-Librarian", f"{msg}")
+    return {"findings": [f"Obsidian: {local_context}"], "current_status": "librarian_done"}
 
 def scout_node(state: AgentState):
     query = state["query"]
-    emit_event("status", "V3-Scout", "Minerando a Web e GitHub...")
+    emit_thought("V3-Scout", "Preparando motores de busca externa.")
+    emit_radio("V3-Scout", "Squad", f"Minerando dados sobre '{query}' via Tavily.")
     
-    # Simulação de busca
-    finding = f"Artigo recente sobre {query} encontrado."
-    emit_event("finding", "V3-Scout", finding)
+    if not tavily:
+        emit_radio("V3-Scout", "Analyst", "Busca Web indisponível. Continuando com dados locais.")
+        return {"findings": ["Busca Web desabilitada"], "current_status": "scout_done"}
+
+    try:
+        search_result = tavily.search(query=query, search_depth="advanced")
+        findings = [f"Web: {r['title']} - {f['content'][:200]}..." for r in [search_result] for f in r.get('results', [])]
+        emit_radio("V3-Scout", "Analyst", f"Encontrei {len(findings)} resultados na Web.")
+    except Exception as e:
+        emit_radio("V3-Scout", "System", f"Erro na busca: {e}")
+        findings = [f"Erro na busca Web: {e}"]
     
-    return {"findings": [finding], "current_status": "scout_done"}
+    for finding in findings:
+        emit_event("finding", "V3-Scout", finding)
+    
+    return {"findings": findings, "current_status": "scout_done"}
+
+def analyst_node(state: AgentState):
+    emit_thought("V3-Analyst", "Consolidando dados do Librarian e Scout.")
+    emit_radio("V3-Analyst", "Architect", "Dados validados. Pode estruturar o rascunho.")
+    return {"current_status": "analyst_done"}
 
 def architect_node(state: AgentState):
-    emit_event("status", "V8-Architect", "Estruturando o artefato final...")
-    findings = "\n".join(state.get("findings", []))
+    emit_thought("V8-Architect", "Gerando estrutura do artefato final.")
+    emit_radio("V8-Architect", "User", "Aqui está o rascunho inicial.")
     
+    findings = "\n".join(state.get("findings", []))
     artifact = f"# Draft: {state['query']}\n\nBaseado nas pesquisas:\n{findings}"
     emit_event("artifact_update", "V8-Architect", "Rascunho gerado.")
     
@@ -67,11 +116,13 @@ def architect_node(state: AgentState):
 workflow = StateGraph(AgentState)
 workflow.add_node("librarian", librarian_node)
 workflow.add_node("scout", scout_node)
+workflow.add_node("analyst", analyst_node)
 workflow.add_node("architect", architect_node)
 
 workflow.set_entry_point("librarian")
 workflow.add_edge("librarian", "scout")
-workflow.add_edge("scout", "architect")
+workflow.add_edge("scout", "analyst")
+workflow.add_edge("analyst", "architect")
 workflow.add_edge("architect", END)
 
 app = workflow.compile()
